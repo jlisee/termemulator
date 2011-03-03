@@ -449,13 +449,17 @@ class TermEmulatorDemo(wx.Frame):
         if ascii < 256:
              keystrokes = chr(ascii)
         elif ascii == wx.WXK_UP:
-            keystrokes = "\033[A"
+            keystrokes = \
+                self.termEmulator.TranslateCursor(TermEmulator.CURSOR_UP)
         elif ascii == wx.WXK_DOWN:
-            keystrokes = "\033[B"
+            keystrokes = \
+                self.termEmulator.TranslateCursor(TermEmulator.CURSOR_DOWN)
         elif ascii == wx.WXK_RIGHT:
-            keystrokes = "\033[C"
+            keystrokes = \
+                self.termEmulator.TranslateCursor(TermEmulator.CURSOR_RIGHT)
         elif ascii == wx.WXK_LEFT:
-            keystrokes = "\033[D"
+            keystrokes = \
+                self.termEmulator.TranslateCursor(TermEmulator.CURSOR_LEFT)
 
         if keystrokes != None:
             #print "Sending:",

@@ -25,7 +25,7 @@ This module provides terminal emulation for VT100 terminal programs. It handles
 V100 special characters and most important escape sequences. It also handles
 graphics rendition which specifies text style(i.e. bold, italics), foreground color
 and background color. The handled escape sequences are CUU, CUD, CUF, CUB, CHA,
-CUP, ED, EL, VPA and SGR.
+CUP, DECCKM, ED, EL, VPA and SGR.
 """
 
 import sys
@@ -33,6 +33,11 @@ import os
 import pty
 import select
 from array import *
+
+CURSOR_UP = 1
+CURSOR_DOWN = 2
+CURSOR_RIGHT = 3
+CURSOR_LEFT = 4
 
 class V102Terminal:
     __ASCII_NUL = 0     # Null
@@ -62,6 +67,14 @@ class V102Terminal:
                         # The values are 1-based, and default to 1 (top left
                         # corner). 
     
+    __ESCSEQ_DECCKM_ON = 'h' # Turns on the application cursor key mode 
+                             # translation meaning cursors become 0A,0B,OC,OD
+                             # instead of [A,[B,[C,[D This only works when n is
+                             # is 1
+
+    __ESCSEQ_DECCKM_RESET = 'l' # Resets application cursor key mode to the
+                                # standard mapping. It only works when n is 1.
+
     __ESCSEQ_ED = 'J'   # n J: Clears part of the screen. If n is zero 
                         # (or missing), clear from cursor to end of screen. 
                         # If n is one, clear from cursor to beginning of the 
@@ -82,6 +95,8 @@ class V102Terminal:
                         # separated with ;. With no parameters, CSI m is treated
                         # as CSI 0 m (reset / normal), which is typical of most
                         # of the ANSI codes.
+
+    ESC = '\033'        # ASCII text for escape sequence
     
     RENDITION_STYLE_BOLD = 1
     RENDITION_STYLE_DIM = 2
@@ -97,7 +112,7 @@ class V102Terminal:
     CALLBACK_UPDATE_CURSOR_POS = 3
     CALLBACK_UPDATE_WINDOW_TITLE = 4
     CALLBACK_UNHANDLED_ESC_SEQ = 5
-    
+
     def __init__(self, rows, cols):
         """
         Initializes the terminal with specified rows and columns. User can 
@@ -110,6 +125,7 @@ class V102Terminal:
         self.curX = 0
         self.curY = 0
         self.ignoreChars = False
+        self.cursorKeyMapping = None
         
         # special character handlers
         self.charHandlers = {
@@ -128,18 +144,40 @@ class V102Terminal:
                             }
         
         # escape sequence handlers
-        self.escSeqHandlers = {
-                               self.__ESCSEQ_CUU:self.__OnEscSeqCUU,
-                               self.__ESCSEQ_CUD:self.__OnEscSeqCUD,
-                               self.__ESCSEQ_CUF:self.__OnEscSeqCUF,
-                               self.__ESCSEQ_CUB:self.__OnEscSeqCUB,
-                               self.__ESCSEQ_CHA:self.__OnEscSeqCHA,
-                               self.__ESCSEQ_CUP:self.__OnEscSeqCUP,
-                               self.__ESCSEQ_ED:self.__OnEscSeqED,
-                               self.__ESCSEQ_EL:self.__OnEscSeqEL,
-                               self.__ESCSEQ_VPA:self.__OnEscSeqVPA,
-                               self.__ESCSEQ_SGR:self.__OnEscSeqSGR,
-                              }
+        self.escSeqHandlers = \
+            {
+             self.__ESCSEQ_CUU:self.__OnEscSeqCUU,
+             self.__ESCSEQ_CUD:self.__OnEscSeqCUD,
+             self.__ESCSEQ_CUF:self.__OnEscSeqCUF,
+             self.__ESCSEQ_CUB:self.__OnEscSeqCUB,
+             self.__ESCSEQ_CHA:self.__OnEscSeqCHA,
+             self.__ESCSEQ_CUP:self.__OnEscSeqCUP,
+             self.__ESCSEQ_ED:self.__OnEscSeqED,
+             self.__ESCSEQ_EL:self.__OnEscSeqEL,
+             self.__ESCSEQ_VPA:self.__OnEscSeqVPA,
+             self.__ESCSEQ_SGR:self.__OnEscSeqSGR,
+             self.__ESCSEQ_DECCKM_ON:self.__OnEscSeqDECCKM_ON,
+             self.__ESCSEQ_DECCKM_RESET:self.__OnEscSeqDECCKM_RESET
+            }
+
+        # currsor key mode mapping
+        self.standardCursorMapping = \
+            {
+             CURSOR_UP: self.ESC + '[' + self.__ESCSEQ_CUU,
+             CURSOR_DOWN: self.ESC + '[' + self.__ESCSEQ_CUD,
+             CURSOR_RIGHT: self.ESC + '[' + self.__ESCSEQ_CUF,
+             CURSOR_LEFT: self.ESC + '[' + self.__ESCSEQ_CUB
+            }
+
+        self.applicationCursorMapping = \
+            {
+             CURSOR_UP: self.ESC + 'O' + self.__ESCSEQ_CUU,
+             CURSOR_DOWN: self.ESC + 'O' + self.__ESCSEQ_CUD,
+             CURSOR_RIGHT: self.ESC + 'O' + self.__ESCSEQ_CUF,
+             CURSOR_LEFT: self.ESC + 'O' + self.__ESCSEQ_CUB
+            }
+
+        self.cursorMapping = self.standardCursorMapping
         
         # defines the printable characters, only these characters are printed
         # on the terminal
@@ -520,6 +558,12 @@ class V102Terminal:
             file.write(self.screen[i].tostring())
             file.write("\n")
 
+    def TranslateCursor(self, cursor):
+        """
+        Translates CURSOR_UP, etc. events into the proper escape sequence
+        """
+        return self.cursorMapping[cursor]
+
     def __NewLine(self):
         """
         Moves the cursor to the next line, if the cursor is already at the
@@ -587,7 +631,7 @@ class V102Terminal:
             index, finalChar, interChars = self.__ParseEscSeq(text, index)
             
             if finalChar == '?':
-                self.unparsedInput = "\033["
+                self.unparsedInput = self.ESC + "["
                 if interChars != None:
                     self.unparsedInput += interChars
             elif finalChar in self.escSeqHandlers.keys():
@@ -790,7 +834,53 @@ class V102Terminal:
         
         self.curX = x
         self.curY = y
-        
+
+    def __OnEscSeqDECCKM_ON(self, params):
+        """
+        Handles the DECCKM_ON escape sequence
+        """
+        goodCmd = False
+
+        if params != None:
+            n = int(params[1:])
+
+            if 1 == n:
+                goodCmd = True
+
+                self.cursorMapping = self.applicationCursorMapping
+
+        if not goodCmd:
+            interChars = ''
+            if params != None:
+                interChars = params
+            escSeq = interChars + self.__ESCSEQ_DECCKM_ON
+
+            if self.callbacks[self.CALLBACK_UNHANDLED_ESC_SEQ] != None:    
+                self.callbacks[self.CALLBACK_UNHANDLED_ESC_SEQ](escSeq)
+
+    def __OnEscSeqDECCKM_RESET(self, params):
+        """
+        Handles the DECCKM_RESET escape sequence
+        """
+        goodCmd = False
+
+        if params != None:
+            n = int(params[1:])
+
+            if 1 == n:
+                goodCmd = True
+
+                self.cursorMapping = self.standardCursorMapping
+
+        if not goodCmd:
+            interChars = ''
+            if params != None:
+                interChars = params
+            escSeq = interChars + self.__ESCSEQ_DECCKM_ON
+
+            if self.callbacks[self.CALLBACK_UNHANDLED_ESC_SEQ] != None:    
+                self.callbacks[self.CALLBACK_UNHANDLED_ESC_SEQ](escSeq)
+
     def __OnEscSeqED(self, params):
         """
         Handler for escape sequence ED 
