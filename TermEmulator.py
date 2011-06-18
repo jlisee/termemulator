@@ -375,7 +375,7 @@ class V102Terminal:
     def GetChar(self, row, col):
         """
         Returns the character at the location specified by row and col. The
-        row and col should be in the range 0..rows - 1 and 0..cols - 1."
+        row and col should be in the range 0..rows - 1 and 0..cols - 1.
         """
         if row < 0 or row >= self.rows:
             return None
@@ -840,14 +840,16 @@ class V102Terminal:
         Handles the DECCKM_ON escape sequence
         """
         goodCmd = False
-
-        if params != None:
+        n = 0
+        
+        try:
             n = int(params[1:])
+        except ValueError, TypeError:
+            pass
 
-            if 1 == n:
-                goodCmd = True
-
-                self.cursorMapping = self.applicationCursorMapping
+        if 1 == n:
+            goodCmd = True
+            self.cursorMapping = self.applicationCursorMapping
 
         if not goodCmd:
             interChars = ''
@@ -863,14 +865,16 @@ class V102Terminal:
         Handles the DECCKM_RESET escape sequence
         """
         goodCmd = False
-
-        if params != None:
+        n = 0
+        
+        try:
             n = int(params[1:])
+        except ValueError, TypeError:
+            pass
 
-            if 1 == n:
-                goodCmd = True
-
-                self.cursorMapping = self.standardCursorMapping
+        if 1 == n:
+            goodCmd = True
+            self.cursorMapping = self.standardCursorMapping
 
         if not goodCmd:
             interChars = ''
